@@ -1,0 +1,17 @@
+{
+  "ConnectionStrings": {
+    "DefaultConnection": "Server=147.93.32.147;Database=fore_barber;User=fore_forestbarber;Password=KC6LF6ofFy92#wD#;"
+  },
+  "Jwt": {
+    "Key": "production-key-super-segura",
+    "Issuer": "tu-dominio.com",
+    "Audience": "tu-dominio.com"
+  },
+  "AllowedHosts": "forestbarber.site",
+  "Logging": {
+    "LogLevel": {
+      "Default": "Information",
+      "Microsoft.AspNetCore": "Warning"
+    }
+  }
+}
