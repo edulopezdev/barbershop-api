@@ -1,4 +1,5 @@
 using System.ComponentModel.DataAnnotations;
+using System.ComponentModel.DataAnnotations.Schema;
 
 namespace backend.Models
 {
@@ -18,5 +19,11 @@ namespace backend.Models
 
         [Required]
         public int EstadoId { get; set; }
+
+        // Relación con la tabla Atencion
+        public ICollection<Atencion> Atenciones { get; set; } = new List<Atencion>();
+
+        // Relación con la tabla BloqueoHorario
+        public ICollection<BloqueoHorario> BloqueosHorario { get; set; } = new List<BloqueoHorario>();
     }
 }

@@ -24,6 +24,7 @@ namespace backend.Models
         public decimal TotalCalculado => DetalleAtencion.Sum(d => d.Cantidad * d.PrecioUnitario);
 
         public int? TurnoId { get; set; }
+        public Turno? Turno { get; set; } // Relación con Turno
 
         // Relación con CierreDiario
         public int? CierreDiarioId { get; set; }

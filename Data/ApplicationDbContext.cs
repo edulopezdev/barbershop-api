@@ -22,6 +22,9 @@ namespace backend.Data
         // Nuevas tablas para cierre de caja
         public DbSet<CierreDiario> CierresDiarios { get; set; }
         public DbSet<CierreDiarioPago> CierresDiariosPagos { get; set; }
+        public DbSet<BloqueoHorario> BloqueosHorario { get; set; }
+        public DbSet<ConfiguracionTurno> ConfiguracionTurno { get; set; } // Agregar DbSet para ConfiguracionTurno
+        public DbSet<DisponibilidadBarbero> DisponibilidadBarbero { get; set; }
 
         protected override void OnModelCreating(ModelBuilder modelBuilder) // Mapeo de tablas y relaciones
         {
@@ -59,6 +62,9 @@ namespace backend.Data
                 .WithOne(p => p.CierreDiario)
                 .HasForeignKey(p => p.CierreDiarioId)
                 .OnDelete(DeleteBehavior.Cascade);
+
+            modelBuilder.Entity<BloqueoHorario>().ToTable("bloqueo_horario");
+            modelBuilder.Entity<ConfiguracionTurno>().ToTable("configuracion_turno"); // Mapear tabla configuracion_turno
         }
     }
 }

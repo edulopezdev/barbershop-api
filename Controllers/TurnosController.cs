@@ -1,56 +1,40 @@
-using backend.Data;
 using backend.Models;
+using backend.Services;
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.EntityFrameworkCore;
 
 namespace backend.Controllers
 {
-    [Route("api/[controller]")]
     [ApiController]
+    [Route("api/[controller]")]
     public class TurnosController : ControllerBase
     {
-        private readonly ApplicationDbContext _context;
+        private readonly ITurnoService _turnoService;
 
-        public TurnosController(ApplicationDbContext context)
+        public TurnosController(ITurnoService turnoService)
         {
-            _context = context;
+            _turnoService = turnoService;
         }
 
         // GET: api/turnos (Lista de turnos)
         [HttpGet]
-        public IActionResult GetTurnos(int page = 1, int pageSize = 10)
+        public async Task<IActionResult> GetAllTurnosAsync()
         {
-            var totalTurnos = _context.Turno.Count();
-            var turnos = _context
-                .Turno.OrderBy(t => t.FechaHora)
-                .Skip((page - 1) * pageSize)
-                .Take(pageSize)
-                .ToList();
-
+            var turnos = await _turnoService.GetAllTurnosAsync();
             return Ok(
                 new
                 {
                     status = 200,
-                    message = totalTurnos > 0
-                        ? "Lista de turnos obtenida correctamente."
-                        : "No hay turnos disponibles.",
-                    pagination = new
-                    {
-                        totalPages = (int)Math.Ceiling((double)totalTurnos / pageSize),
-                        currentPage = page,
-                        pageSize,
-                        totalTurnos,
-                    },
-                    turnos = turnos ?? new List<Turno>(), // esto es para evitar nulls
+                    message = "Turnos obtenidos correctamente.",
+                    data = turnos,
                 }
             );
         }
 
         // GET: api/turnos/{id}
         [HttpGet("{id}")]
-        public async Task<IActionResult> GetTurno(int id)
+        public async Task<IActionResult> GetTurnoById(int id)
         {
-            var turno = await _context.Turno.FindAsync(id);
+            var turno = await _turnoService.GetTurnoByIdAsync(id);
             if (turno == null)
             {
                 return NotFound(
@@ -75,90 +59,63 @@ namespace backend.Controllers
 
         // POST: api/turnos
         [HttpPost]
-        public async Task<IActionResult> PostTurno(Turno turno)
+        public async Task<IActionResult> CreateTurno([FromBody] Turno turno)
         {
-            // Validar datos básicos antes de crear el turno
-            if (turno.FechaHora == default)
+            if (!ModelState.IsValid)
+            {
+                return BadRequest(ModelState);
+            }
+
+            try
+            {
+                var createdTurno = await _turnoService.CreateTurnoAsync(turno);
+                return CreatedAtAction(
+                    nameof(GetTurnoById),
+                    new { id = createdTurno.Id },
+                    new
+                    {
+                        status = 201,
+                        message = "Turno creado correctamente.",
+                        turno = createdTurno,
+                    }
+                );
+            }
+            catch (InvalidOperationException ex)
             {
                 return BadRequest(
                     new
                     {
                         status = 400,
                         error = "Bad Request",
-                        message = "La fecha y hora del turno son obligatorias.",
+                        message = ex.Message,
                     }
                 );
             }
-
-            _context.Turno.Add(turno);
-            await _context.SaveChangesAsync();
-
-            return CreatedAtAction(
-                nameof(GetTurno),
-                new { id = turno.Id },
-                new
-                {
-                    status = 201,
-                    message = "Turno creado correctamente.",
-                    turno,
-                }
-            );
+            catch (Exception ex)
+            {
+                return StatusCode(
+                    500,
+                    new
+                    {
+                        status = 500,
+                        error = "Internal Server Error",
+                        message = "Ocurrió un error inesperado: " + ex.Message,
+                    }
+                );
+            }
         }
 
         // PUT: api/turnos/{id}
         [HttpPut("{id}")]
-        public async Task<IActionResult> PutTurno(int id, Turno turno)
+        public async Task<IActionResult> UpdateTurno(int id, [FromBody] Turno turno)
         {
-            if (id != turno.Id)
+            if (!ModelState.IsValid)
             {
-                return BadRequest(
-                    new
-                    {
-                        status = 400,
-                        error = "Bad Request",
-                        message = "El ID en la URL no coincide con el ID del cuerpo de la solicitud.",
-                    }
-                );
+                return BadRequest(ModelState);
             }
 
-            _context.Entry(turno).State = EntityState.Modified;
-
-            try
-            {
-                await _context.SaveChangesAsync();
-            }
-            catch (DbUpdateConcurrencyException)
-            {
-                if (!_context.Turno.Any(e => e.Id == id))
-                {
-                    return NotFound(
-                        new
-                        {
-                            status = 404,
-                            error = "Not Found",
-                            message = "El turno no existe.",
-                        }
-                    );
-                }
-                throw;
-            }
-
-            return Ok(
-                new
-                {
-                    status = 200,
-                    message = "Turno actualizado correctamente.",
-                    turno,
-                }
-            );
-        }
-
-        // DELETE: api/turnos/{id}
-        [HttpDelete("{id}")]
-        public async Task<IActionResult> DeleteTurno(int id)
-        {
-            var turno = await _context.Turno.FindAsync(id);
-            if (turno == null)
+            var updatedTurno = await _turnoService.UpdateTurnoAsync(id, turno);
+            if (updatedTurno == null)
             {
                 return NotFound(
                     new
@@ -170,85 +127,47 @@ namespace backend.Controllers
                 );
             }
 
-            // Verificar si el turno está vinculado en `Atencion`
-            var tieneDependencias = _context.Atencion.Any(a => a.TurnoId == id);
-            if (tieneDependencias)
+            return Ok(
+                new
+                {
+                    status = 200,
+                    message = "Turno actualizado correctamente.",
+                    turno = updatedTurno,
+                }
+            );
+        }
+
+        // DELETE: api/turnos/{id}
+        [HttpDelete("{id}")]
+        public async Task<IActionResult> DeleteTurno(int id)
+        {
+            var deleted = await _turnoService.DeleteTurnoAsync(id);
+            if (!deleted)
             {
-                return BadRequest(
+                return NotFound(
                     new
                     {
-                        status = 400,
-                        error = "Bad Request",
-                        message = "No se puede eliminar el turno porque está vinculado a una atención.",
-                        details = new
-                        {
-                            TurnoId = id,
-                            Relacion = "Atencion",
-                            Motivo = "Restricción de clave foránea",
-                        },
+                        status = 404,
+                        error = "Not Found",
+                        message = "El turno no existe.",
                     }
                 );
             }
 
-            _context.Turno.Remove(turno);
-            await _context.SaveChangesAsync();
-
-            return Ok(
-                new
-                {
-                    status = 200,
-                    message = "Turno eliminado correctamente.",
-                    turnoIdEliminado = id,
-                }
-            );
+            return NoContent();
         }
 
-        //-------Filtros-------//
-        [HttpGet("PorFecha")]
-        public IActionResult GetTurnosPorFecha(DateTime fecha, int page = 1, int pageSize = 10)
-        {
-            var query = _context.Turno.AsQueryable();
-
-            // Filtrar por fecha específica
-            query = query.Where(t => t.FechaHora.Date == fecha.Date);
-
-            var totalTurnos = query.Count();
-            var turnos = query
-                .OrderBy(t => t.FechaHora)
-                .Skip((page - 1) * pageSize)
-                .Take(pageSize)
-                .ToList();
-
-            return Ok(
-                new
-                {
-                    status = 200,
-                    message = totalTurnos > 0
-                        ? "Lista de turnos obtenida correctamente."
-                        : "No hay turnos en la fecha especificada.",
-                    pagination = new
-                    {
-                        totalPages = (int)Math.Ceiling((double)totalTurnos / pageSize),
-                        currentPage = page,
-                        pageSize,
-                        totalTurnos,
-                    },
-                    turnos = turnos ?? new List<Turno>(),
-                }
-            );
-        }
-
-        [HttpGet("PorRango")]
-        public IActionResult GetTurnosPorRango(
-            DateTime fechaInicio,
-            DateTime fechaFin,
-            int page = 1,
-            int pageSize = 10
+        // GET: api/turnos/disponibilidad
+        [HttpGet("disponibilidad")]
+        public async Task<IActionResult> GetDisponibilidad(
+            [FromQuery] int barberoId,
+            [FromQuery] DateTime? fechaInicio = null,
+            [FromQuery] DateTime? fechaFin = null
         )
         {
-            var query = _context.Turno.AsQueryable();
+            fechaInicio ??= DateTime.Now;
+            fechaFin ??= DateTime.Now.AddDays(7);
 
-            // 🔹 Validar que `fechaInicio` no sea mayor que `fechaFin`
             if (fechaInicio > fechaFin)
             {
                 return BadRequest(
@@ -261,129 +180,122 @@ namespace backend.Controllers
                 );
             }
 
-            // 🔹 Filtrar turnos dentro del rango de fechas
-            query = query.Where(t =>
-                t.FechaHora.Date >= fechaInicio.Date && t.FechaHora.Date <= fechaFin.Date
-            );
-
-            var totalTurnos = query.Count();
-            var turnos = query
-                .OrderBy(t => t.FechaHora)
-                .Skip((page - 1) * pageSize)
-                .Take(pageSize)
-                .ToList();
-
-            return Ok(
-                new
+            try
+            {
+                // Validar si el barbero existe
+                var barberoExiste = await _turnoService.BarberoExisteAsync(barberoId);
+                if (!barberoExiste)
                 {
-                    status = 200,
-                    message = totalTurnos > 0
-                        ? "Lista de turnos obtenida correctamente."
-                        : "No hay turnos dentro del rango de fechas especificado.",
-                    pagination = new
-                    {
-                        totalPages = (int)Math.Ceiling((double)totalTurnos / pageSize),
-                        currentPage = page,
-                        pageSize,
-                        totalTurnos,
-                    },
-                    turnos = turnos ?? new List<Turno>(),
+                    return NotFound(
+                        new
+                        {
+                            status = 404,
+                            error = "Not Found",
+                            message = "El barbero especificado no existe.",
+                        }
+                    );
                 }
-            );
-        }
 
-        [HttpGet("PorCliente")]
-        public IActionResult GetTurnoPorCliente(int clienteId, int page = 1, int pageSize = 10)
-        {
-            var query = _context.Turno.AsQueryable();
+                // Obtener disponibilidad (YA incluye la validación de turnos ocupados)
+                var horarios = await _turnoService.GetDisponibilidadAsync(
+                    barberoId,
+                    fechaInicio.Value,
+                    fechaFin.Value
+                );
 
-            // Validar que `clienteId` sea válido
-            if (clienteId <= 0)
+                // Transformar a formato deseado
+                var disponibilidad = horarios.Select(h => new
+                {
+                    Inicio = h.Fecha.Add(h.HoraInicio),
+                    Fin = h.Fecha.Add(h.HoraFin),
+                });
+
+                return Ok(
+                    new
+                    {
+                        status = 200,
+                        message = "Disponibilidad obtenida correctamente.",
+                        data = disponibilidad,
+                    }
+                );
+            }
+            catch (InvalidOperationException ex)
             {
                 return BadRequest(
                     new
                     {
                         status = 400,
                         error = "Bad Request",
-                        message = "El clienteId debe ser mayor a 0.",
+                        message = ex.Message,
                     }
                 );
             }
-
-            // Filtrar por cliente asegurando que `ClienteId` existe
-            query = query.Where(t => t.ClienteId == clienteId);
-
-            var totalTurnos = query.Count();
-            var turno = query
-                .OrderBy(t => t.FechaHora)
-                .Skip((page - 1) * pageSize)
-                .Take(pageSize)
-                .ToList();
-
-            return Ok(
-                new
-                {
-                    status = 200,
-                    message = totalTurnos > 0
-                        ? "Lista de turno obtenida correctamente."
-                        : "No hay turno para el cliente especificado.",
-                    pagination = new
+            catch (Exception ex)
+            {
+                return StatusCode(
+                    500,
+                    new
                     {
-                        totalPages = (int)Math.Ceiling((double)totalTurnos / pageSize),
-                        currentPage = page,
-                        pageSize,
-                        totalTurnos,
-                    },
-                    turno = turno ?? new List<Turno>(),
-                }
-            );
+                        status = 500,
+                        error = "Internal Server Error",
+                        message = "Ocurrió un error inesperado: " + ex.Message,
+                    }
+                );
+            }
         }
 
-        [HttpGet("PorEstado")]
-        public IActionResult GetTurnoPorEstado(int estadoId, int page = 1, int pageSize = 10)
+        // GET: api/turnos/ocupados
+        [HttpGet("ocupados")]
+        public async Task<IActionResult> GetTurnosOcupados(
+            [FromQuery] int barberoId,
+            [FromQuery] DateTime? fechaInicio = null,
+            [FromQuery] DateTime? fechaFin = null
+        )
         {
-            var query = _context.Turno.AsQueryable();
+            fechaInicio ??= DateTime.Now;
+            fechaFin ??= DateTime.Now.AddDays(7);
 
-            // Validar que `estadoId` sea válido
-            if (estadoId <= 0)
+            if (fechaInicio > fechaFin)
             {
                 return BadRequest(
                     new
                     {
                         status = 400,
                         error = "Bad Request",
-                        message = "El estadoId debe ser mayor a 0.",
+                        message = "La fecha de inicio no puede ser mayor que la fecha de fin.",
                     }
                 );
             }
 
-            // Filtrar por estado asegurando que `EstadoId` existe
-            query = query.Where(t => t.EstadoId == estadoId);
+            try
+            {
+                var turnosOcupados = await _turnoService.GetTurnosOcupadosAsync(
+                    barberoId,
+                    fechaInicio.Value,
+                    fechaFin.Value
+                );
 
-            var totalTurnos = query.Count();
-            var turno = query
-                .OrderBy(t => t.FechaHora)
-                .Skip((page - 1) * pageSize)
-                .Take(pageSize)
-                .ToList();
-
-            return Ok(
-                new
-                {
-                    status = 200,
-                    message = totalTurnos > 0
-                        ? "Lista de turno obtenida correctamente."
-                        : "No hay turno con el estado especificado.",
-                    pagination = new
+                return Ok(
+                    new
                     {
-                        totalPages = (int)Math.Ceiling((double)totalTurnos / pageSize),
-                        currentPage = page,
-                        pageSize,
-                        totalTurnos,
-                    },
-                    turno = turno ?? new List<Turno>(),
-                }
-            );
+                        status = 200,
+                        message = "Turnos ocupados obtenidos correctamente.",
+                        data = turnosOcupados,
+                    }
+                );
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(
+                    500,
+                    new
+                    {
+                        status = 500,
+                        error = "Internal Server Error",
+                        message = "Ocurrió un error inesperado: " + ex.Message,
+                    }
+                );
+            }
         }
     }
 }

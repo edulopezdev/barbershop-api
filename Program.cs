@@ -166,6 +166,7 @@ builder.Services.AddScoped<IAtencionService>(provider =>
     var stockService = provider.GetRequiredService<IStockService>();
     return new AtencionService(context, logger, stockService);
 });
+builder.Services.AddScoped<ITurnoService, TurnoService>();
 builder.Services.AddSingleton(builder.Configuration);
 
 // Registrar servicios de acceso a datos
