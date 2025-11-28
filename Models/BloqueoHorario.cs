@@ -17,8 +17,5 @@ namespace backend.Models
         public DateTime FechaHoraFin { get; set; }
 
         public string? Motivo { get; set; }
-
-        // Relación con Turno
-        public ICollection<Turno> Turnos { get; set; } = new List<Turno>();
     }
 }

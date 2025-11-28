@@ -33,24 +33,29 @@ builder.Logging.SetMinimumLevel(LogLevel.Information); // para el código, info+
 
 //--- Servicios ---//
 
-// Configurar CORS antes de construir la aplicación
 //Original
-// var corsPolicy = "_myAllowSpecificOrigins";
+
 // builder.Services.AddCors(options =>
 // {
-//     options.AddPolicy( //aca lo q hacemos es crear un policy con el nombre "_myAllowSpecificOrigins"
-//         corsPolicy,
+//     options.AddPolicy(
+//         "AllowFrontend",
 //         policy =>
 //         {
 //             policy
-//                 .WithOrigins("http://localhost:5173") // entonces aca estamos diciendo que permitimos q la url http://localhost:5173 haga peticiones
-//                 .AllowAnyMethod() // esto es para permitir cualquier metodo (http, post, put, delete, etc.)
-//                 .AllowAnyHeader(); // esto es para permitir cualquier header de la peticion (http, content-type, authorization, etc.)
+//                 .WithOrigins(
+//                     "http://localhost:5173", // Desarrollo
+//                     "http://127.0.0.1:5000", // Desarrollo
+//                     "https://forestbarber.site", // Producción
+//                     "http://forestbarber.site" // Producción
+//                 )
+//                 .AllowAnyMethod()
+//                 .AllowAnyHeader()
+//                 .AllowCredentials();
 //         }
 //     );
 // });
 
-//Cambio
+//Nueva para la app
 builder.Services.AddCors(options =>
 {
     options.AddPolicy(
@@ -59,8 +64,10 @@ builder.Services.AddCors(options =>
         {
             policy
                 .WithOrigins(
-                    "http://localhost:5173", // Desarrollo
-                    "http://127.0.0.1:5000", // Desarrollo
+                    "http://localhost:5173", // Desarrollo web
+                    "http://127.0.0.1:5000", // Desarrollo local
+                    "http://10.0.2.2:5000", // Emulador Android
+                    "http://192.168.0.109:5000", // Tu IP local para dispositivos físicos
                     "https://forestbarber.site", // Producción
                     "http://forestbarber.site" // Producción
                 )
@@ -168,6 +175,10 @@ builder.Services.AddScoped<IAtencionService>(provider =>
 });
 builder.Services.AddScoped<ITurnoService, TurnoService>();
 builder.Services.AddSingleton(builder.Configuration);
+builder.Services.AddScoped<
+    backend.Services.Interfaces.IUsuarioService,
+    backend.Services.UsuarioService
+>();
 
 // Registrar servicios de acceso a datos
 var app = builder.Build();
@@ -230,7 +241,9 @@ app.MapControllers(); // esto es para habilitar los enroutadores de los controla
 //Original
 // app.Run();
 //Cambio
-app.Run("http://localhost:5000");
+//app.Run("http://localhost:5000");
+//Nueva para la app
+app.Run("http://0.0.0.0:5000");
 
 record WeatherForecast(DateOnly Date, int TemperatureC, string? Summary)
 {

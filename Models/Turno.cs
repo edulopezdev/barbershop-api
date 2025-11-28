@@ -22,8 +22,5 @@ namespace backend.Models
 
         // Relación con la tabla Atencion
         public ICollection<Atencion> Atenciones { get; set; } = new List<Atencion>();
-
-        // Relación con la tabla BloqueoHorario
-        public ICollection<BloqueoHorario> BloqueosHorario { get; set; } = new List<BloqueoHorario>();
     }
 }

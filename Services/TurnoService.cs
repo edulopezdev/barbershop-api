@@ -15,17 +15,13 @@ namespace backend.Services
 
         public async Task<IEnumerable<Turno>> GetAllTurnosAsync()
         {
-            return await _context
-                .Turno.Include(t => t.Atenciones)
-                .Include(t => t.BloqueosHorario)
-                .ToListAsync();
+            return await _context.Turno.Include(t => t.Atenciones).ToListAsync();
         }
 
         public async Task<Turno?> GetTurnoByIdAsync(int id)
         {
             return await _context
                 .Turno.Include(t => t.Atenciones)
-                .Include(t => t.BloqueosHorario)
                 .FirstOrDefaultAsync(t => t.Id == id);
         }
 
