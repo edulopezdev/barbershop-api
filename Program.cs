@@ -1,61 +1,31 @@
-using System.IdentityModel.Tokens.Jwt;
 using System.Reflection;
-using System.Security.Claims;
 using System.Text;
 using System.Text.Json.Serialization;
 using backend.Data;
 using backend.Services;
 using backend.Services.Interfaces;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
-using Microsoft.AspNetCore.Authorization;
-using Microsoft.AspNetCore.Builder;
-using Microsoft.AspNetCore.Hosting;
-using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.Configuration;
-using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Hosting;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi.Models;
 
-var builder = WebApplication.CreateBuilder(args); // aca lo q se hace es crear la instancia de la app
+var builder = WebApplication.CreateBuilder(args);
 
-builder.Logging.ClearProviders(); // esto es para limpiar los proveedores de logging
-builder.Logging.AddConsole(); // esto es para agregar el proveedor de logging de consola
+// ---------------------
+// LOGGING
+// ---------------------
+builder.Logging.ClearProviders();
+builder.Logging.AddConsole();
+builder.Logging.AddFilter("Microsoft.EntityFrameworkCore.Database.Command", LogLevel.Warning);
+builder.Logging.AddFilter("Microsoft.EntityFrameworkCore.Query", LogLevel.Error);
+builder.Logging.AddFilter("Microsoft.EntityFrameworkCore", LogLevel.Error);
+builder.Logging.AddFilter("Microsoft", LogLevel.Warning);
+builder.Logging.AddFilter("System", LogLevel.Warning);
+builder.Logging.SetMinimumLevel(LogLevel.Information);
 
-builder.Logging.AddFilter("Microsoft.EntityFrameworkCore.Database.Command", LogLevel.Warning); // solo warnings+ comandos SQL
-builder.Logging.AddFilter("Microsoft.EntityFrameworkCore.Query", LogLevel.Error); // oculta warnings de query (como Skip/Take sin OrderBy)
-builder.Logging.AddFilter("Microsoft.EntityFrameworkCore", LogLevel.Error); // para otros logs EF Core, solo errores
-builder.Logging.AddFilter("Microsoft", LogLevel.Warning); // Microsoft en general, solo warnings+
-builder.Logging.AddFilter("System", LogLevel.Warning); // System en general, solo warnings+
-
-builder.Logging.SetMinimumLevel(LogLevel.Information); // para el código, info+
-
-//--- Servicios ---//
-
-//Original
-
-// builder.Services.AddCors(options =>
-// {
-//     options.AddPolicy(
-//         "AllowFrontend",
-//         policy =>
-//         {
-//             policy
-//                 .WithOrigins(
-//                     "http://localhost:5173", // Desarrollo
-//                     "http://127.0.0.1:5000", // Desarrollo
-//                     "https://forestbarber.site", // Producción
-//                     "http://forestbarber.site" // Producción
-//                 )
-//                 .AllowAnyMethod()
-//                 .AllowAnyHeader()
-//                 .AllowCredentials();
-//         }
-//     );
-// });
-
-//Nueva para la app
+// ---------------------
+// CORS
+// ---------------------
 builder.Services.AddCors(options =>
 {
     options.AddPolicy(
@@ -64,12 +34,12 @@ builder.Services.AddCors(options =>
         {
             policy
                 .WithOrigins(
-                    "http://localhost:5173", // Desarrollo web
-                    "http://127.0.0.1:5000", // Desarrollo local
-                    "http://10.0.2.2:5000", // Emulador Android
-                    "http://192.168.0.109:5000", // Tu IP local para dispositivos físicos
-                    "https://forestbarber.site", // Producción
-                    "http://forestbarber.site" // Producción
+                    "http://localhost:5173",
+                    "http://127.0.0.1:5000",
+                    "http://10.0.2.2:5000",
+                    "http://192.168.0.109:5000",
+                    "https://forestbarber.site",
+                    "http://forestbarber.site"
                 )
                 .AllowAnyMethod()
                 .AllowAnyHeader()
@@ -78,16 +48,21 @@ builder.Services.AddCors(options =>
     );
 });
 
-// Agregar controladores y explorador de API
+// ---------------------
+// CONTROLLERS + JSON
+// ---------------------
 builder
     .Services.AddControllers()
-    .AddJsonOptions(options =>
+    .AddJsonOptions(opts =>
     {
-        options.JsonSerializerOptions.Converters.Add(new JsonStringEnumConverter());
+        opts.JsonSerializerOptions.Converters.Add(new JsonStringEnumConverter());
     });
+
 builder.Services.AddEndpointsApiExplorer();
 
-// Configurar Swagger
+// ---------------------
+// SWAGGER
+// ---------------------
 builder.Services.AddSwaggerGen(options =>
 {
     options.AddSecurityDefinition(
@@ -99,8 +74,7 @@ builder.Services.AddSwaggerGen(options =>
             Scheme = "Bearer",
             BearerFormat = "JWT",
             In = ParameterLocation.Header,
-            Description =
-                "Introduce tu token JWT aquí. Ejemplo: 'Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...'",
+            Description = "Coloca tu token JWT: Bearer <token>",
         }
     );
 
@@ -116,19 +90,21 @@ builder.Services.AddSwaggerGen(options =>
                         Id = "Bearer",
                     },
                 },
-                Array.Empty<string>()
+                new string[] { }
             },
         }
     );
 
-    options.ResolveConflictingActions(apiDescriptions => apiDescriptions.First());
-
-    var xmlFilename = $"{Assembly.GetExecutingAssembly().GetName().Name}.xml";
-    var xmlPath = Path.Combine(AppContext.BaseDirectory, xmlFilename);
-    options.IncludeXmlComments(xmlPath);
+    // Comentado porque en Varios proyectos rompe el inicio si no existe el XML
+    // var xmlFilename = $"{Assembly.GetExecutingAssembly().GetName().Name}.xml";
+    // var xmlPath = Path.Combine(AppContext.BaseDirectory, xmlFilename);
+    // if (File.Exists(xmlPath))
+    //     options.IncludeXmlComments(xmlPath);
 });
 
-// Configurar base de datos
+// ---------------------
+// DATABASE
+// ---------------------
 builder.Services.AddDbContext<ApplicationDbContext>(options =>
     options.UseMySql(
         builder.Configuration.GetConnectionString("DefaultConnection"),
@@ -136,18 +112,19 @@ builder.Services.AddDbContext<ApplicationDbContext>(options =>
     )
 );
 
-// Configurar autenticación JWT
+// ---------------------
+// JWT AUTHENTICATION
+// ---------------------
 builder
-    .Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme) // esto es para autenticar con JWT
-    .AddJwtBearer(options => // esto es para configurar JWT
+    .Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
+    .AddJwtBearer(options =>
     {
         var jwtKey =
             builder.Configuration["Jwt:Key"]
-            ?? throw new ArgumentNullException("Jwt:Key no está definido"); // esto es para obtener la clave de JWT
+            ?? throw new ArgumentNullException("Jwt:Key no está definido");
 
-        var key = Encoding.ASCII.GetBytes(jwtKey); // esto es para convertir la clave de JWT a bytes
+        var key = Encoding.ASCII.GetBytes(jwtKey);
 
-        // esto es para configurar JWT para autenticación y autorización de JWT
         options.TokenValidationParameters = new TokenValidationParameters
         {
             ValidateIssuer = true,
@@ -160,12 +137,16 @@ builder
         };
     });
 
-builder.Services.AddAuthorization(); // esto lo q hace es configurar autorización
+builder.Services.AddAuthorization();
 
-// Registrar servicios de negocio
+// ---------------------
+// SERVICIOS DE NEGOCIO
+// ---------------------
 builder.Services.AddScoped<IVentaService, VentaService>();
 builder.Services.AddScoped<ICierreDiarioService, CierreDiarioService>();
 builder.Services.AddScoped<IStockService, StockService>();
+builder.Services.AddScoped<ITurnoService, TurnoService>();
+
 builder.Services.AddScoped<IAtencionService>(provider =>
 {
     var context = provider.GetRequiredService<ApplicationDbContext>();
@@ -173,17 +154,20 @@ builder.Services.AddScoped<IAtencionService>(provider =>
     var stockService = provider.GetRequiredService<IStockService>();
     return new AtencionService(context, logger, stockService);
 });
-builder.Services.AddScoped<ITurnoService, TurnoService>();
+
+builder.Services.AddScoped<IUsuarioService, UsuarioService>();
+builder.Services.AddScoped<IEmailSender, EmailSender>();
+builder.Services.AddScoped<IVerificacionService, VerificacionService>();
+
+// ⚠️ DESACTIVADO TEMPORALMENTE hasta confirmar que NO usa DbContext directamente
+// builder.Services.AddHostedService<CleanupBackgroundService>();
+
 builder.Services.AddSingleton(builder.Configuration);
-builder.Services.AddScoped<
-    backend.Services.Interfaces.IUsuarioService,
-    backend.Services.UsuarioService
->();
 
-// Registrar servicios de acceso a datos
+// ---------------------
+// APP
+// ---------------------
 var app = builder.Build();
-
-// Middleware
 
 if (app.Environment.IsDevelopment())
 {
@@ -191,60 +175,23 @@ if (app.Environment.IsDevelopment())
     app.UseSwaggerUI();
 }
 
-app.UseHttpsRedirection();
+// ⚠️ DESACTIVADO: Esto redirige a HTTPS y rompe Swagger en 5000
+// app.UseHttpsRedirection();
 
-//esto va a servir el contenido estatico desde la carpeta wwwroot
 app.UseStaticFiles();
 
-app.UseAuthentication();
-
-// Aplica la política de CORS después de autenticación pero antes de autorización
 app.UseCors("AllowFrontend");
 
+app.UseAuthentication();
 app.UseAuthorization();
 
-// Rutas de ejemplo
-var summaries = new[]
-{
-    "Freezing",
-    "Bracing",
-    "Chilly",
-    "Cool",
-    "Mild",
-    "Warm",
-    "Balmy",
-    "Hot",
-    "Sweltering",
-    "Scorching",
-};
+app.MapControllers();
 
-app.MapGet(
-        "/weatherforecast",
-        () =>
-        {
-            var forecast = Enumerable
-                .Range(1, 5)
-                .Select(index => new WeatherForecast(
-                    DateOnly.FromDateTime(DateTime.Now.AddDays(index)),
-                    Random.Shared.Next(-20, 55),
-                    summaries[Random.Shared.Next(summaries.Length)]
-                ))
-                .ToArray();
-            return forecast;
-        }
-    )
-    .WithName("GetWeatherForecast")
-    .WithOpenApi();
-
-app.MapControllers(); // esto es para habilitar los enroutadores de los controladores
-
-//Original
-// app.Run();
-//Cambio
-//app.Run("http://localhost:5000");
-//Nueva para la app
 app.Run("http://0.0.0.0:5000");
 
+// ---------------------
+// RECORD
+// ---------------------
 record WeatherForecast(DateOnly Date, int TemperatureC, string? Summary)
 {
     public int TemperatureF => 32 + (int)(TemperatureC / 0.5556);
