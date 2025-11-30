@@ -95,6 +95,7 @@ namespace backend.Controllers
         // Método auxiliar para verificar contraseña
         private bool VerifyPassword(string password, string hashedPassword)
         {
+            // ✅ Usar BCrypt en lugar de PasswordHasher
             return BCrypt.Net.BCrypt.Verify(password, hashedPassword);
         }
 
