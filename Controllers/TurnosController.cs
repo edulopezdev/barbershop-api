@@ -1101,7 +1101,7 @@ namespace backend.Controllers
                 if (!string.IsNullOrWhiteSpace(search))
                 {
                     var s = search.Trim().ToLower();
-                    query = query.Where(u => u.Nombre.ToLower().Contains(s));
+                    query = query.Where(u => u.Nombre != null && u.Nombre.ToLower().Contains(s));
                 }
 
                 var barberos = await query

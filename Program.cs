@@ -10,6 +10,8 @@ using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi.Models;
 
 var builder = WebApplication.CreateBuilder(args);
+Console.WriteLine(">>> JWT KEY USADA: " + builder.Configuration["Jwt:Key"]);
+Console.WriteLine(">>> JWT KEY LENGTH: " + (builder.Configuration["Jwt:Key"]?.Length ?? 0));
 
 // ---------------------
 // LOGGING
@@ -37,7 +39,7 @@ builder.Services.AddCors(options =>
                     "http://localhost:5173",
                     "http://127.0.0.1:5000",
                     "http://10.0.2.2:5000",
-                    "http://192.168.0.109:5000",
+                    "http://192.168.0.108:5000",
                     "https://forestbarber.site",
                     "http://forestbarber.site"
                 )
@@ -115,6 +117,11 @@ builder.Services.AddDbContext<ApplicationDbContext>(options =>
 // ---------------------
 // JWT AUTHENTICATION
 // ---------------------
+
+// DEBUG — VER QUÉ JWT KEY ESTÁ CARGANDO
+Console.WriteLine(">>> JWT KEY USADA: " + builder.Configuration["Jwt:Key"]);
+Console.WriteLine(">>> JWT KEY LENGTH: " + (builder.Configuration["Jwt:Key"]?.Length ?? 0));
+
 builder
     .Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
     .AddJwtBearer(options =>
@@ -167,6 +174,14 @@ builder.Services.AddSingleton(builder.Configuration);
 // ---------------------
 // APP
 // ---------------------
+
+Console.WriteLine("=== CONFIG LOADED ===");
+foreach (var kvp in builder.Configuration.AsEnumerable())
+{
+    Console.WriteLine($"{kvp.Key} = {kvp.Value}");
+}
+Console.WriteLine("======================");
+
 var app = builder.Build();
 
 if (app.Environment.IsDevelopment())
