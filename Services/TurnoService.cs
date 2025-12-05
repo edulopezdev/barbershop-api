@@ -129,6 +129,9 @@ namespace backend.Services
             existingTurno.BarberoId = updatedTurno.BarberoId;
             existingTurno.EstadoId = updatedTurno.EstadoId;
 
+            // Registrar fecha de modificación (si el servicio no conoce usuario, dejar solo la fecha)
+            existingTurno.FechaModificacion = DateTime.Now;
+
             await _context.SaveChangesAsync();
             return existingTurno;
         }

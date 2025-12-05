@@ -775,7 +775,7 @@ namespace backend.Controllers
 
         // GET: api/usuarios/perfil
         [HttpGet("perfil")]
-        [Authorize(Roles = "Administrador,Barbero")]
+        [Authorize(Roles = "Administrador,Barbero,Cliente")]
         public IActionResult GetPerfil()
         {
             var userId = User.GetUserId();
@@ -827,7 +827,7 @@ namespace backend.Controllers
 
         // PUT: api/usuarios/perfil
         [HttpPut("perfil")]
-        [Authorize(Roles = "Administrador,Barbero")]
+        [Authorize(Roles = "Administrador,Barbero,Cliente")]
         public IActionResult UpdatePerfil()
         {
             try

@@ -36,6 +36,50 @@ namespace backend.Data
             // Mapear tablas existentes
             modelBuilder.Entity<Usuario>().ToTable("usuario");
             modelBuilder.Entity<Turno>().ToTable("turno");
+
+            // Configurar columnas adicionales si existen en el modelo Turno
+            modelBuilder.Entity<Turno>(entity =>
+            {
+                entity.ToTable("turno");
+
+                entity
+                    .Property<string?>("ModificadoPor")
+                    .HasColumnName("modificado_por")
+                    .HasMaxLength(100)
+                    .IsRequired(false);
+
+                entity
+                    .Property<DateTime?>("FechaModificacion")
+                    .HasColumnName("fecha_modificacion")
+                    .HasColumnType("datetime(6)")
+                    .IsRequired(false);
+
+                entity
+                    .Property<string?>("Observacion")
+                    .HasColumnName("observacion")
+                    .HasMaxLength(500)
+                    .IsRequired(false);
+
+                // Configurar relaciones
+                entity
+                    .HasOne(t => t.Cliente)
+                    .WithMany()
+                    .HasForeignKey(t => t.ClienteId)
+                    .OnDelete(DeleteBehavior.Restrict);
+
+                entity
+                    .HasOne(t => t.Barbero)
+                    .WithMany()
+                    .HasForeignKey(t => t.BarberoId)
+                    .OnDelete(DeleteBehavior.Restrict);
+
+                entity
+                    .HasOne(t => t.Estado)
+                    .WithMany()
+                    .HasForeignKey(t => t.EstadoId)
+                    .OnDelete(DeleteBehavior.Restrict);
+            });
+
             modelBuilder.Entity<ProductoServicio>().ToTable("productos_servicios");
             modelBuilder.Entity<Atencion>().ToTable("atencion");
             modelBuilder.Entity<DetalleAtencion>().ToTable("detalle_atencion");

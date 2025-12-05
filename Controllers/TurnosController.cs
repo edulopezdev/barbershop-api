@@ -66,7 +66,27 @@ namespace backend.Controllers
                 // Administrador ve todos
                 if (string.Equals(role, "Administrador", StringComparison.OrdinalIgnoreCase))
                 {
-                    var turnosAll = await _context.Turno.ToListAsync();
+                    var turnosAll = await _context
+                        .Turno.Include(t => t.Cliente)
+                        .Include(t => t.Barbero)
+                        .Include(t => t.Estado)
+                        .Select(t => new
+                        {
+                            t.Id,
+                            t.FechaHora,
+                            Cliente = t.Cliente != null
+                                ? new { t.ClienteId, Nombre = t.Cliente.Nombre ?? "Desconocido" }
+                                : null,
+                            Barbero = t.Barbero != null
+                                ? new { t.BarberoId, Nombre = t.Barbero.Nombre ?? "Desconocido" }
+                                : null,
+                            Estado = t.Estado != null
+                                ? new { t.EstadoId, Nombre = t.Estado.Nombre ?? "Desconocido" }
+                                : null,
+                            CantidadAtenciones = t.Atenciones.Count,
+                        })
+                        .ToListAsync();
+
                     return Ok(
                         new
                         {
@@ -82,8 +102,22 @@ namespace backend.Controllers
                 {
                     var turnosBarbero = await _context
                         .Turno.Where(t => t.BarberoId == userId.Value)
-                        .OrderByDescending(t => t.FechaHora)
+                        .Include(t => t.Cliente)
+                        .Include(t => t.Estado)
+                        .Select(t => new
+                        {
+                            t.Id,
+                            t.FechaHora,
+                            Cliente = t.Cliente != null
+                                ? new { t.ClienteId, Nombre = t.Cliente.Nombre ?? "Desconocido" }
+                                : null,
+                            Estado = t.Estado != null
+                                ? new { t.EstadoId, Nombre = t.Estado.Nombre ?? "Desconocido" }
+                                : null,
+                            CantidadAtenciones = t.Atenciones.Count,
+                        })
                         .ToListAsync();
+
                     return Ok(
                         new
                         {
@@ -99,8 +133,22 @@ namespace backend.Controllers
                 {
                     var turnosCliente = await _context
                         .Turno.Where(t => t.ClienteId == userId.Value)
-                        .OrderByDescending(t => t.FechaHora)
+                        .Include(t => t.Barbero)
+                        .Include(t => t.Estado)
+                        .Select(t => new
+                        {
+                            t.Id,
+                            t.FechaHora,
+                            Barbero = t.Barbero != null
+                                ? new { t.BarberoId, Nombre = t.Barbero.Nombre ?? "Desconocido" }
+                                : null,
+                            Estado = t.Estado != null
+                                ? new { t.EstadoId, Nombre = t.Estado.Nombre ?? "Desconocido" }
+                                : null,
+                            CantidadAtenciones = t.Atenciones.Count,
+                        })
                         .ToListAsync();
+
                     return Ok(
                         new
                         {
@@ -111,7 +159,16 @@ namespace backend.Controllers
                     );
                 }
 
-                return Forbid("Rol no autorizado para listar turnos.");
+                // Reemplazado Forbid(...) por 403 con mensaje
+                return StatusCode(
+                    403,
+                    new
+                    {
+                        status = 403,
+                        error = "Forbidden",
+                        message = "Rol no autorizado para listar turnos.",
+                    }
+                );
             }
             catch (Exception ex)
             {
@@ -131,7 +188,28 @@ namespace backend.Controllers
             if (userId == null || string.IsNullOrEmpty(role))
                 return Unauthorized("Token inválido");
 
-            var turno = await _context.Turno.FindAsync(id);
+            var turno = await _context
+                .Turno.Include(t => t.Cliente)
+                .Include(t => t.Barbero)
+                .Include(t => t.Estado)
+                .Where(t => t.Id == id)
+                .Select(t => new
+                {
+                    t.Id,
+                    t.FechaHora,
+                    Cliente = t.Cliente != null
+                        ? new { t.ClienteId, Nombre = t.Cliente.Nombre ?? "Desconocido" }
+                        : null,
+                    Barbero = t.Barbero != null
+                        ? new { t.BarberoId, Nombre = t.Barbero.Nombre ?? "Desconocido" }
+                        : null,
+                    Estado = t.Estado != null
+                        ? new { t.EstadoId, Nombre = t.Estado.Nombre ?? "Desconocido" }
+                        : null,
+                    CantidadAtenciones = t.Atenciones.Count,
+                })
+                .FirstOrDefaultAsync();
+
             if (turno == null)
                 return NotFound(
                     new
@@ -142,48 +220,14 @@ namespace backend.Controllers
                     }
                 );
 
-            // Admin puede ver cualquiera
-            if (string.Equals(role, "Administrador", StringComparison.OrdinalIgnoreCase))
-                return Ok(
-                    new
-                    {
-                        status = 200,
-                        message = "Turno encontrado.",
-                        turno,
-                    }
-                );
-
-            // Barbero solo si es suyo
-            if (string.Equals(role, "Barbero", StringComparison.OrdinalIgnoreCase))
-            {
-                if (turno.BarberoId == userId.Value)
-                    return Ok(
-                        new
-                        {
-                            status = 200,
-                            message = "Turno encontrado.",
-                            turno,
-                        }
-                    );
-                return Forbid("No tienes permiso para ver este turno.");
-            }
-
-            // Cliente solo si es suyo
-            if (string.Equals(role, "Cliente", StringComparison.OrdinalIgnoreCase))
-            {
-                if (turno.ClienteId == userId.Value)
-                    return Ok(
-                        new
-                        {
-                            status = 200,
-                            message = "Turno encontrado.",
-                            turno,
-                        }
-                    );
-                return Forbid("No tienes permiso para ver este turno.");
-            }
-
-            return Forbid("Rol no autorizado.");
+            return Ok(
+                new
+                {
+                    status = 200,
+                    message = "Turno encontrado.",
+                    turno,
+                }
+            );
         }
 
         // POST: api/turnos
@@ -429,12 +473,28 @@ namespace backend.Controllers
             if (string.Equals(role, "Barbero", StringComparison.OrdinalIgnoreCase))
             {
                 if (turnoExistente.BarberoId != userId.Value)
-                    return Forbid("No tienes permiso para modificar este turno.");
+                    return StatusCode(
+                        403,
+                        new
+                        {
+                            status = 403,
+                            error = "Forbidden",
+                            message = "No tienes permiso para modificar este turno.",
+                        }
+                    );
             }
             // Clientes no pueden editar turnos
             if (string.Equals(role, "Cliente", StringComparison.OrdinalIgnoreCase))
             {
-                return Forbid("Clientes no pueden modificar turnos.");
+                return StatusCode(
+                    403,
+                    new
+                    {
+                        status = 403,
+                        error = "Forbidden",
+                        message = "Clientes no pueden modificar turnos.",
+                    }
+                );
             }
 
             // Obtener configuración para duración de turno
@@ -484,6 +544,10 @@ namespace backend.Controllers
             turnoExistente.BarberoId = turno.BarberoId;
             turnoExistente.EstadoId = turno.EstadoId;
 
+            // Registrar auditoría de modificación
+            turnoExistente.ModificadoPor = $"{role}:{userId}";
+            turnoExistente.FechaModificacion = DateTime.Now;
+
             await _context.SaveChangesAsync();
 
             return Ok(
@@ -531,7 +595,15 @@ namespace backend.Controllers
             if (string.Equals(role, "Barbero", StringComparison.OrdinalIgnoreCase))
             {
                 if (turno.BarberoId != userId.Value)
-                    return Forbid("No tienes permiso para eliminar este turno.");
+                    return StatusCode(
+                        403,
+                        new
+                        {
+                            status = 403,
+                            error = "Forbidden",
+                            message = "No tienes permiso para eliminar este turno.",
+                        }
+                    );
 
                 _context.Turno.Remove(turno);
                 await _context.SaveChangesAsync();
@@ -539,7 +611,15 @@ namespace backend.Controllers
             }
 
             // Clientes no pueden eliminar turnos
-            return Forbid("Clientes no pueden eliminar turnos.");
+            return StatusCode(
+                403,
+                new
+                {
+                    status = 403,
+                    error = "Forbidden",
+                    message = "Clientes no pueden eliminar turnos.",
+                }
+            );
         }
 
         // GET: api/turnos/disponibilidad
@@ -690,21 +770,33 @@ namespace backend.Controllers
                 return Unauthorized("Token inválido");
 
             if (!string.Equals(rolClaim, "Cliente", StringComparison.OrdinalIgnoreCase))
-                return Forbid("Solo clientes pueden acceder a este endpoint");
+                return StatusCode(
+                    403,
+                    new
+                    {
+                        status = 403,
+                        error = "Forbidden",
+                        message = "Solo clientes pueden acceder a este endpoint",
+                    }
+                );
 
             try
             {
+                var hoy = DateTime.Today;
                 var turnos = await _context
-                    .Turno.Include(t => t.Atenciones)
-                    .Where(t => t.ClienteId == userId.Value)
-                    .OrderByDescending(t => t.FechaHora)
+                    .Turno.Where(t => t.ClienteId == userId.Value && t.FechaHora >= hoy)
+                    .Include(t => t.Barbero)
+                    .Include(t => t.Estado)
                     .Select(t => new
                     {
                         t.Id,
                         t.FechaHora,
-                        t.ClienteId,
-                        t.BarberoId,
-                        t.EstadoId,
+                        Barbero = t.Barbero != null
+                            ? new { t.BarberoId, Nombre = t.Barbero.Nombre ?? "Desconocido" }
+                            : null,
+                        Estado = t.Estado != null
+                            ? new { t.EstadoId, Nombre = t.Estado.Nombre ?? "Desconocido" }
+                            : null,
                         CantidadAtenciones = t.Atenciones.Count,
                     })
                     .ToListAsync();
@@ -737,7 +829,15 @@ namespace backend.Controllers
                 return Unauthorized("Token inválido");
 
             if (!string.Equals(rolClaim, "Cliente", StringComparison.OrdinalIgnoreCase))
-                return Forbid("Solo clientes pueden acceder a este endpoint");
+                return StatusCode(
+                    403,
+                    new
+                    {
+                        status = 403,
+                        error = "Forbidden",
+                        message = "Solo clientes pueden acceder a este endpoint",
+                    }
+                );
 
             try
             {
@@ -829,15 +929,35 @@ namespace backend.Controllers
             if (string.Equals(role, "Barbero", StringComparison.OrdinalIgnoreCase))
             {
                 if (turno.BarberoId != userId.Value)
-                    return Forbid("No tienes permiso para modificar el estado de este turno.");
+                    return StatusCode(
+                        403,
+                        new
+                        {
+                            status = 403,
+                            error = "Forbidden",
+                            message = "No tienes permiso para modificar el estado de este turno.",
+                        }
+                    );
             }
 
             // Clientes no pueden cambiar estado
             if (string.Equals(role, "Cliente", StringComparison.OrdinalIgnoreCase))
-                return Forbid("Clientes no pueden modificar el estado de turnos.");
+                return StatusCode(
+                    403,
+                    new
+                    {
+                        status = 403,
+                        error = "Forbidden",
+                        message = "Clientes no pueden modificar el estado de turnos.",
+                    }
+                );
 
             // Administrador puede cambiar cualquiera
             turno.EstadoId = dto.EstadoId;
+
+            // Registrar auditoría de modificación
+            turno.ModificadoPor = $"{role}:{userId}";
+            turno.FechaModificacion = DateTime.Now;
 
             await _context.SaveChangesAsync();
 
@@ -936,6 +1056,195 @@ namespace backend.Controllers
                 {
                     status = 200,
                     message = "Estado actualizado correctamente y cliente notificado.",
+                    turno,
+                }
+            );
+        }
+
+        // NUEVO ENDPOINT: Cliente cancela su propio turno
+        // POST: api/turnos/{id}/cancelar
+        [HttpPost("{id}/cancelar")]
+        [Authorize]
+        public async Task<IActionResult> CancelarTurno(int id, [FromBody] CancelarTurnoDto? dto)
+        {
+            var userId = GetUserIdFromClaims();
+            var role = GetRoleFromClaims();
+            if (userId == null || string.IsNullOrEmpty(role))
+                return Unauthorized("Token inválido");
+
+            if (!string.Equals(role, "Cliente", StringComparison.OrdinalIgnoreCase))
+            {
+                return StatusCode(
+                    403,
+                    new
+                    {
+                        status = 403,
+                        error = "Forbidden",
+                        message = "Solo clientes pueden usar este endpoint para cancelar sus turnos.",
+                    }
+                );
+            }
+
+            var turno = await _context.Turno.FindAsync(id);
+            if (turno == null)
+            {
+                return NotFound(
+                    new
+                    {
+                        status = 404,
+                        error = "Not Found",
+                        message = "El turno no existe.",
+                    }
+                );
+            }
+
+            if (turno.ClienteId != userId.Value)
+            {
+                return StatusCode(
+                    403,
+                    new
+                    {
+                        status = 403,
+                        error = "Forbidden",
+                        message = "No podés cancelar un turno que no es tuyo.",
+                    }
+                );
+            }
+
+            if (turno.EstadoId == 3)
+            {
+                return BadRequest(
+                    new
+                    {
+                        status = 400,
+                        error = "Bad Request",
+                        message = "El turno ya está cancelado.",
+                    }
+                );
+            }
+
+            var configuraciones = await ObtenerConfiguracionesSistemaAsync();
+
+            // Verificar ventana de cancelación
+            var limiteCancelacion = DateTime.Now.AddHours(configuraciones.CancelacionMinimaHoras);
+            if (turno.FechaHora <= limiteCancelacion)
+            {
+                return BadRequest(
+                    new
+                    {
+                        status = 400,
+                        error = "Bad Request",
+                        message = $"Los turnos solo pueden cancelarse con al menos {configuraciones.CancelacionMinimaHoras} horas de anticipación.",
+                    }
+                );
+            }
+
+            // Si hay observación enviada pero la configuración no lo permite
+            if (
+                !configuraciones.ObservacionCancelacionHabilitada
+                && !string.IsNullOrWhiteSpace(dto?.Observacion)
+            )
+            {
+                return BadRequest(
+                    new
+                    {
+                        status = 400,
+                        error = "Bad Request",
+                        message = "Observación de cancelación no está habilitada en la configuración del sistema.",
+                    }
+                );
+            }
+
+            // Guardar observación si está habilitada
+            if (configuraciones.ObservacionCancelacionHabilitada)
+            {
+                string? obs = dto?.Observacion?.Trim();
+
+                if (!string.IsNullOrEmpty(obs))
+                {
+                    if (obs.Length > 500)
+                        obs = obs.Substring(0, 500);
+
+                    turno.Observacion = obs;
+                }
+                else
+                {
+                    turno.Observacion = null;
+                }
+            }
+
+            // Realizar cancelación
+            turno.EstadoId = 3;
+
+            // Auditoría
+            turno.ModificadoPor = $"{role}:{userId}";
+            turno.FechaModificacion = DateTime.Now;
+
+            await _context.SaveChangesAsync();
+
+            // Notificación por email
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    var cliente = await _context.Usuario.FindAsync(turno.ClienteId);
+                    var barbero = await _context.Usuario.FindAsync(turno.BarberoId);
+
+                    if (cliente == null || barbero == null)
+                        return;
+
+                    if (string.IsNullOrEmpty(cliente.Email))
+                    {
+                        _logger.LogWarning(
+                            "Email no disponible para cliente {ClienteId}",
+                            cliente.Id
+                        );
+                    }
+                    else
+                    {
+                        var fechaTurno = turno.FechaHora.ToString(
+                            "dddd, dd 'de' MMMM 'de' yyyy",
+                            new System.Globalization.CultureInfo("es-ES")
+                        );
+                        var horaTurno = turno.FechaHora.ToString("HH:mm");
+                        var nombreCliente = cliente.Nombre ?? "Cliente";
+                        var nombreBarbero = barbero.Nombre ?? "Barbero";
+
+                        var htmlTemplate = await _emailSender.GetTurnoCanceladoTemplateAsync(
+                            nombreCliente,
+                            fechaTurno,
+                            horaTurno,
+                            nombreBarbero
+                        );
+
+                        await _emailSender.SendEmailAsync(
+                            cliente.Email,
+                            "❌ Turno cancelado - Forest Barber",
+                            htmlTemplate
+                        );
+
+                        _logger.LogInformation(
+                            "Email de cancelación enviado a {Email} para turno {TurnoId}",
+                            cliente.Email,
+                            turno.Id
+                        );
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(
+                        ex,
+                        "Error enviando email de cancelación para turno {TurnoId}",
+                        turno.Id
+                    );
+                }
+            });
+
+            return Ok(
+                new
+                {
+                    status = 200,
+                    message = "Turno cancelado correctamente.",
                     turno,
                 }
             );
@@ -1105,11 +1414,11 @@ namespace backend.Controllers
                 }
 
                 var barberos = await query
-                    .OrderBy(u => u.Nombre)
+                    .OrderBy(u => u.Nombre ?? "")
                     .Select(u => new
                     {
                         u.Id,
-                        u.Nombre,
+                        Nombre = u.Nombre ?? "Desconocido",
                         u.Avatar,
                         u.Telefono,
                     })
@@ -1181,6 +1490,8 @@ namespace backend.Controllers
                         "HORARIO_MATUTINO_FIN",
                         "HORARIO_VESPERTINO_INICIO",
                         "HORARIO_VESPERTINO_FIN",
+                        "CANCELACION_MINIMA_HORAS",
+                        "OBSERVACION_CANCELACION_HABILITADA", // <-- nueva clave leída
                     }.Contains(c.Clave)
                 )
                 .ToDictionaryAsync(c => c.Clave, c => c.Valor);
@@ -1204,6 +1515,23 @@ namespace backend.Controllers
             )
                 ? anticipacion
                 : 2;
+
+            // NUEVO: tiempo mínimo (horas) antes del turno para que un cliente pueda cancelar
+            configuraciones.CancelacionMinimaHoras = int.TryParse(
+                configs.GetValueOrDefault("CANCELACION_MINIMA_HORAS"),
+                out var cancelMin
+            )
+                ? cancelMin
+                : 1; // valor por defecto: 1 hora
+
+            // NUEVO: flag para permitir que cliente deje observación al cancelar
+            configuraciones.ObservacionCancelacionHabilitada = bool.TryParse(
+                configs.GetValueOrDefault("OBSERVACION_CANCELACION_HABILITADA"),
+                out var obsHabilitado
+            )
+                ? obsHabilitado
+                : false;
+
             configuraciones.HorarioMatutinoInicio =
                 configs.GetValueOrDefault("HORARIO_MATUTINO_INICIO") ?? "10:00";
             configuraciones.HorarioMatutinoFin =
@@ -1250,9 +1578,21 @@ namespace backend.Controllers
         public int DuracionTurnoMinutos { get; set; } = 60;
         public int MaxTurnosPorClientePorDia { get; set; } = 3;
         public int AntipacionMinimaHoras { get; set; } = 2;
+
+        // NUEVA propiedad: horas mínimas antes del turno para permitir cancelación por parte del cliente
+        public int CancelacionMinimaHoras { get; set; } = 1;
         public string HorarioMatutinoInicio { get; set; } = "10:00";
         public string HorarioMatutinoFin { get; set; } = "13:00";
         public string HorarioVespertinoInicio { get; set; } = "17:00";
         public string HorarioVespertinoFin { get; set; } = "21:00";
+
+        // NUEVA propiedad: habilitar observación en cancelación
+        public bool ObservacionCancelacionHabilitada { get; set; } = false;
+    }
+
+    // DTO pequeño para aceptar observación al cancelar (opcional)
+    public class CancelarTurnoDto
+    {
+        public string? Observacion { get; set; }
     }
 }
