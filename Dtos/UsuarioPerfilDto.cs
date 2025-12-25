@@ -13,5 +13,8 @@ namespace backend.Dtos
         public bool Activo { get; set; }
         public DateTime FechaRegistro { get; set; }
         public string? Avatar { get; set; }
+
+        // URL absoluta conveniente para el frontend (ej. https://api.example.com/avatars/123/..)
+        public string? AvatarUrl { get; set; }
     }
 }

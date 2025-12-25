@@ -17,15 +17,18 @@ namespace backend.Controllers
 {
     [Route("api/[controller]")]
     [ApiController]
-    [Authorize] // protección general de todos los endpoints
-    // este es el controlador de usuarios q hereda de ControllerBase
+    [Authorize]
     public class UsuariosController : ControllerBase
     {
-        private readonly ApplicationDbContext _context; // aca se define el contexto para interactuar con la BD
+        private readonly ApplicationDbContext _context;
+
+        // Agregar constantes para reuse y claridad
+        private static readonly string[] AllowedImageTypes = new[] { "image/jpeg", "image/png" };
+        private const long MaxAvatarBytes = 2 * 1024 * 1024; // 2 MB exactos
 
         public UsuariosController(ApplicationDbContext context)
         {
-            _context = context; // se inyecta el contexto para interactuar con la BD
+            _context = context;
         }
 
         // GET: api/usuarios (lista de usuarios con roles distintos a 3)
@@ -810,10 +813,12 @@ namespace backend.Controllers
                 AccedeAlSistema = usuario.AccedeAlSistema,
                 Activo = usuario.Activo,
                 FechaRegistro = usuario.FechaRegistro,
-                Avatar = !string.IsNullOrEmpty(usuario.Avatar)
-                    ? usuario.Avatar
-                    : "/avatars/no_avatar.jpg",
             };
+
+            // avatar puede ser null; avatarUrl siempre absoluta (nunca null)
+            perfilDto.Avatar = usuario.Avatar; // null si no existe
+            var avatarRel = usuario.Avatar ?? "/avatars/no_avatar.jpg";
+            perfilDto.AvatarUrl = $"{Request.Scheme}://{Request.Host}{avatarRel}";
 
             return Ok(
                 new
@@ -893,31 +898,39 @@ namespace backend.Controllers
                 // Función local para eliminar avatar
                 void EliminarArchivoAvatar(string avatarRuta)
                 {
-                    var oldFilePath = Path.Combine(
-                        Directory.GetCurrentDirectory(),
-                        "wwwroot",
-                        avatarRuta.TrimStart('/')
-                    );
-
-                    if (System.IO.File.Exists(oldFilePath))
+                    try
                     {
-                        GC.Collect();
-                        GC.WaitForPendingFinalizers();
+                        var oldFilePath = Path.Combine(
+                            Directory.GetCurrentDirectory(),
+                            "wwwroot",
+                            avatarRuta.TrimStart('/')
+                        );
 
-                        var fileInfo = new FileInfo(oldFilePath);
-                        fileInfo.Attributes = FileAttributes.Normal;
-                        System.IO.File.Delete(oldFilePath);
-
-                        var oldUserFolder = Path.GetDirectoryName(oldFilePath);
-                        if (
-                            Directory.Exists(oldUserFolder)
-                            && !Directory.EnumerateFileSystemEntries(oldUserFolder).Any()
-                        )
+                        if (System.IO.File.Exists(oldFilePath))
                         {
-                            var dirInfo = new DirectoryInfo(oldUserFolder);
-                            dirInfo.Attributes = FileAttributes.Normal;
-                            Directory.Delete(oldUserFolder);
+                            // Forzar GC finalizers por si algún stream quedó abierto anteriormente
+                            GC.Collect();
+                            GC.WaitForPendingFinalizers();
+
+                            var fileInfo = new FileInfo(oldFilePath);
+                            fileInfo.Attributes = FileAttributes.Normal;
+                            System.IO.File.Delete(oldFilePath);
+
+                            var oldUserFolder = Path.GetDirectoryName(oldFilePath);
+                            if (
+                                Directory.Exists(oldUserFolder)
+                                && !Directory.EnumerateFileSystemEntries(oldUserFolder).Any()
+                            )
+                            {
+                                var dirInfo = new DirectoryInfo(oldUserFolder);
+                                dirInfo.Attributes = FileAttributes.Normal;
+                                Directory.Delete(oldUserFolder);
+                            }
                         }
+                    }
+                    catch
+                    {
+                        // No lanzar excepción aquí para evitar 500; si hace falta logging, añadirlo.
                     }
                 }
 
@@ -928,55 +941,129 @@ namespace backend.Controllers
                     usuario.Avatar = null;
                 }
 
-                // Subir nuevo avatar si hay archivo
-                var avatarFile = Request.Form.Files.FirstOrDefault();
+                // Subir nuevo avatar si hay archivo. Buscamos específicamente el campo "file".
+                var avatarFile = Request.Form.Files.FirstOrDefault(f => f.Name == "file");
 
-                if (avatarFile != null && avatarFile.Length > 0)
+                // Si viene eliminarAvatar=true, IGNORAR cualquier archivo enviado en este request
+                if (!eliminarAvatar && avatarFile != null && avatarFile.Length > 0)
                 {
-                    // Si NO eliminamos el avatar y ya existe, eliminar el anterior para reemplazarlo
-                    if (!eliminarAvatar && !string.IsNullOrEmpty(usuario.Avatar))
+                    // Validar tamaño (2 MB) antes de copiar
+                    if (avatarFile.Length > MaxAvatarBytes)
                     {
-                        EliminarArchivoAvatar(usuario.Avatar);
+                        return StatusCode(
+                            413,
+                            new
+                            {
+                                status = 413,
+                                message = "El archivo supera el límite permitido (2 MB).",
+                            }
+                        );
                     }
 
-                    var uploadsFolder = Path.Combine(
-                        Directory.GetCurrentDirectory(),
-                        "wwwroot",
-                        "avatars"
-                    );
-                    var userFolderPath = Path.Combine(uploadsFolder, userId.Value.ToString());
-
-                    if (!Directory.Exists(userFolderPath))
+                    // Leer todo el contenido a memoria para detectar formato real
+                    using (var ms = new MemoryStream())
                     {
-                        Directory.CreateDirectory(userFolderPath);
-                    }
+                        avatarFile.CopyTo(ms);
 
-                    var fileName = $"avatar_{userId}_{Guid.NewGuid()}.jpg";
-                    var filePath = Path.Combine(userFolderPath, fileName);
-
-                    using (var image = Image.Load(avatarFile.OpenReadStream()))
-                    {
-                        var size = new Size(240, 240);
-                        var resizeOptions = new ResizeOptions
+                        if (ms.Length == 0)
                         {
-                            Size = size,
-                            Mode = ResizeMode.Crop, // Mantiene proporción y recorta centrado
-                            Position = AnchorPositionMode.Center,
-                        };
-
-                        image.Mutate(x => x.Resize(resizeOptions));
-
-                        var encoder = new JpegEncoder { Quality = 90 };
-                        using (var outputStream = new FileStream(filePath, FileMode.Create))
-                        {
-                            image.Save(outputStream, encoder);
+                            return StatusCode(
+                                415,
+                                new
+                                {
+                                    status = 415,
+                                    message = "Tipo de archivo no soportado. Se permiten: image/jpeg, image/png.",
+                                }
+                            );
                         }
-                    }
 
-                    usuario.Avatar = $"/avatars/{userId}/{fileName}";
+                        // Detectar formato real a partir de los bytes
+                        ms.Position = 0;
+                        var format = Image.DetectFormat(ms);
+                        if (format == null)
+                        {
+                            return StatusCode(
+                                415,
+                                new
+                                {
+                                    status = 415,
+                                    message = "Tipo de archivo no soportado. Se permiten: image/jpeg, image/png.",
+                                }
+                            );
+                        }
+
+                        var detectedMime = format.DefaultMimeType?.ToLowerInvariant() ?? "";
+                        var allowed = AllowedImageTypes.Contains(detectedMime);
+                        // Si el MIME detectado no está en la lista, rechazar
+                        if (!allowed)
+                        {
+                            return StatusCode(
+                                415,
+                                new
+                                {
+                                    status = 415,
+                                    message = "Tipo de archivo no soportado. Se permiten: image/jpeg, image/png.",
+                                }
+                            );
+                        }
+
+                        // Reiniciar stream para la carga real
+                        ms.Position = 0;
+
+                        // Si NO eliminamos el avatar y ya existe, eliminar el anterior para reemplazarlo
+                        if (!string.IsNullOrEmpty(usuario.Avatar))
+                        {
+                            EliminarArchivoAvatar(usuario.Avatar);
+                        }
+
+                        var uploadsFolder = Path.Combine(
+                            Directory.GetCurrentDirectory(),
+                            "wwwroot",
+                            "avatars"
+                        );
+                        var userFolderPath = Path.Combine(uploadsFolder, userId.Value.ToString());
+
+                        if (!Directory.Exists(userFolderPath))
+                        {
+                            Directory.CreateDirectory(userFolderPath);
+                        }
+
+                        var fileName = $"avatar_{userId}_{Guid.NewGuid()}.jpg";
+                        var filePath = Path.Combine(userFolderPath, fileName);
+
+                        // Cargar imagen desde MemoryStream (formato ya validado), redimensionar y guardar como JPEG
+                        using (var image = Image.Load(ms))
+                        {
+                            var size = new Size(240, 240);
+                            var resizeOptions = new ResizeOptions
+                            {
+                                Size = size,
+                                Mode = ResizeMode.Crop,
+                                Position = AnchorPositionMode.Center,
+                            };
+
+                            // Corregir orientación EXIF antes de redimensionar para evitar rotaciones indeseadas
+                            image.Mutate(x =>
+                            {
+                                x.AutoOrient(); // corrige rotación según EXIF
+                                x.Resize(resizeOptions);
+                            });
+
+                            var encoder = new JpegEncoder { Quality = 90 };
+                            using (var outputStream = new FileStream(filePath, FileMode.Create))
+                            {
+                                image.Save(outputStream, encoder);
+                            }
+                        }
+
+                        usuario.Avatar = $"/avatars/{userId}/{fileName}";
+                    }
                 }
 
                 _context.SaveChanges();
+
+                // Devolver avatar (puede ser null) y avatarUrl (siempre absoluta)
+                var avatarRelResponse = usuario.Avatar ?? "/avatars/no_avatar.jpg";
 
                 return Ok(
                     new
@@ -993,9 +1080,8 @@ namespace backend.Controllers
                             AccedeAlSistema = usuario.AccedeAlSistema,
                             Activo = usuario.Activo,
                             FechaRegistro = usuario.FechaRegistro,
-                            Avatar = !string.IsNullOrEmpty(usuario.Avatar)
-                                ? usuario.Avatar
-                                : "/avatars/no_avatar.jpg",
+                            Avatar = usuario.Avatar, // null si fue eliminado o no existe
+                            AvatarUrl = $"{Request.Scheme}://{Request.Host}{avatarRelResponse}",
                         },
                     }
                 );

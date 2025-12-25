@@ -68,6 +68,19 @@ namespace backend.Services
                             usuariosEliminados
                         );
                     }
+
+                    // También actualizar estados de turnos expirados (pendiente->caducado, confirmado->atendido)
+                    var turnoStateService =
+                        scope.ServiceProvider.GetRequiredService<ITurnoStateService>();
+                    var (caducados, atendidos) = await turnoStateService.UpdateExpiredTurnosAsync();
+                    if (caducados > 0 || atendidos > 0)
+                    {
+                        _logger.LogInformation(
+                            "Limpieza automática - Turnos: {Caducados} caducados, {Atendidos} atendidos.",
+                            caducados,
+                            atendidos
+                        );
+                    }
                 }
             }
             catch (Exception ex)

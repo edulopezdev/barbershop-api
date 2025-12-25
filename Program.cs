@@ -1,3 +1,4 @@
+using System.Linq;
 using System.Reflection;
 using System.Text;
 using System.Text.Json.Serialization;
@@ -5,6 +6,8 @@ using backend.Data;
 using backend.Services;
 using backend.Services.Interfaces;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi.Models;
@@ -58,6 +61,108 @@ builder
     .AddJsonOptions(opts =>
     {
         opts.JsonSerializerOptions.Converters.Add(new JsonStringEnumConverter());
+    })
+    .ConfigureApiBehaviorOptions(options =>
+    {
+        options.InvalidModelStateResponseFactory = context =>
+        {
+            string DisplayField(string raw)
+            {
+                if (string.IsNullOrWhiteSpace(raw))
+                    return "campo";
+                var last = raw.Split('.').Last();
+                return System.Text.RegularExpressions.Regex.Replace(last, @"\[\d+\]", "");
+            }
+
+            string Translate(string field, string original)
+            {
+                if (string.IsNullOrWhiteSpace(original))
+                    return $"Error de validación en el campo {field}.";
+
+                var o = original.ToLowerInvariant();
+
+                if (
+                    o.Contains("required")
+                    || o.Contains("es obligatorio")
+                    || o.Contains("no puede estar vacío")
+                )
+                    return $"El campo {field} es obligatorio.";
+
+                var m = System.Text.RegularExpressions.Regex.Match(
+                    original,
+                    @"minimum length of '(\d+)'",
+                    System.Text.RegularExpressions.RegexOptions.IgnoreCase
+                );
+                if (m.Success)
+                {
+                    var n = m.Groups[1].Value;
+                    return $"El campo {field} debe tener al menos {n} caracteres.";
+                }
+
+                if (o.Contains("minimum length") || o.Contains("mínimo") || o.Contains("minimum"))
+                {
+                    var mm = System.Text.RegularExpressions.Regex.Match(original, "'(\\d+)'");
+                    if (mm.Success)
+                        return $"El campo {field} debe tener al menos {mm.Groups[1].Value} caracteres.";
+                    return $"El campo {field} tiene un tamaño inválido.";
+                }
+
+                if (
+                    o.Contains("invalid")
+                    || o.Contains("not valid")
+                    || o.Contains("no válido")
+                    || o.Contains("is not a valid")
+                )
+                    return $"El campo {field} tiene un valor inválido.";
+
+                return $"Error de validación en el campo {field}.";
+            }
+
+            // Aseguramos que ModelState NO sea null
+            var modelState =
+                context.ModelState
+                ?? new Microsoft.AspNetCore.Mvc.ModelBinding.ModelStateDictionary();
+
+            // --- FIX Warnings CS8602 ---
+            var errors = modelState
+                .Where(kvp => kvp.Value?.Errors?.Count > 0)
+                .SelectMany(kvp =>
+                    kvp.Value!.Errors.Select(err => new
+                    {
+                        Field = DisplayField(kvp.Key),
+                        Message = Translate(
+                            DisplayField(kvp.Key),
+                            err.ErrorMessage ?? string.Empty
+                        ),
+                    })
+                )
+                .ToList();
+            // ---------------------------
+
+            var pd = new ValidationProblemDetails(modelState)
+            {
+                Title = "Errores de validación.",
+                Status = StatusCodes.Status400BadRequest,
+                Detail = "Revisá los campos e intentá nuevamente.",
+            };
+
+            pd.Errors.Clear();
+            foreach (var e in errors)
+            {
+                if (pd.Errors.ContainsKey(e.Field))
+                {
+                    var list = pd.Errors[e.Field].ToList();
+                    list.Add(e.Message);
+                    pd.Errors[e.Field] = list.ToArray();
+                }
+                else
+                {
+                    pd.Errors.Add(e.Field, new[] { e.Message });
+                }
+            }
+
+            return new BadRequestObjectResult(pd) { ContentTypes = { "application/problem+json" } };
+        };
     });
 
 builder.Services.AddEndpointsApiExplorer();
@@ -96,12 +201,6 @@ builder.Services.AddSwaggerGen(options =>
             },
         }
     );
-
-    // Comentado porque en Varios proyectos rompe el inicio si no existe el XML
-    // var xmlFilename = $"{Assembly.GetExecutingAssembly().GetName().Name}.xml";
-    // var xmlPath = Path.Combine(AppContext.BaseDirectory, xmlFilename);
-    // if (File.Exists(xmlPath))
-    //     options.IncludeXmlComments(xmlPath);
 });
 
 // ---------------------
@@ -118,7 +217,6 @@ builder.Services.AddDbContext<ApplicationDbContext>(options =>
 // JWT AUTHENTICATION
 // ---------------------
 
-// DEBUG — VER QUÉ JWT KEY ESTÁ CARGANDO
 Console.WriteLine(">>> JWT KEY USADA: " + builder.Configuration["Jwt:Key"]);
 Console.WriteLine(">>> JWT KEY LENGTH: " + (builder.Configuration["Jwt:Key"]?.Length ?? 0));
 
@@ -153,6 +251,8 @@ builder.Services.AddScoped<IVentaService, VentaService>();
 builder.Services.AddScoped<ICierreDiarioService, CierreDiarioService>();
 builder.Services.AddScoped<IStockService, StockService>();
 builder.Services.AddScoped<ITurnoService, TurnoService>();
+builder.Services.AddScoped<IClienteDashboardService, ClienteDashboardService>();
+builder.Services.AddScoped<IBarberoDashboardService, BarberoDashboardService>();
 
 builder.Services.AddScoped<IAtencionService>(provider =>
 {
@@ -165,16 +265,13 @@ builder.Services.AddScoped<IAtencionService>(provider =>
 builder.Services.AddScoped<IUsuarioService, UsuarioService>();
 builder.Services.AddScoped<IEmailSender, EmailSender>();
 builder.Services.AddScoped<IVerificacionService, VerificacionService>();
-
-// ⚠️ DESACTIVADO TEMPORALMENTE hasta confirmar que NO usa DbContext directamente
-// builder.Services.AddHostedService<CleanupBackgroundService>();
+builder.Services.AddScoped<ITurnoStateService, TurnoStateService>();
 
 builder.Services.AddSingleton(builder.Configuration);
 
 // ---------------------
 // APP
 // ---------------------
-
 Console.WriteLine("=== CONFIG LOADED ===");
 foreach (var kvp in builder.Configuration.AsEnumerable())
 {
@@ -190,16 +287,10 @@ if (app.Environment.IsDevelopment())
     app.UseSwaggerUI();
 }
 
-// ⚠️ DESACTIVADO: Esto redirige a HTTPS y rompe Swagger en 5000
-// app.UseHttpsRedirection();
-
 app.UseStaticFiles();
-
 app.UseCors("AllowFrontend");
-
 app.UseAuthentication();
 app.UseAuthorization();
-
 app.MapControllers();
 
 app.Run("http://0.0.0.0:5000");

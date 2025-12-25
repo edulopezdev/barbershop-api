@@ -14,6 +14,7 @@ namespace backend.Controllers
     [Route("api/[controller]")]
     public class TurnosController : ControllerBase
     {
+        private readonly ITurnoStateService _turnoStateService;
         private readonly ApplicationDbContext _context;
         private readonly ILogger<TurnosController> _logger;
         private readonly IEmailSender _emailSender;
@@ -23,13 +24,15 @@ namespace backend.Controllers
             ApplicationDbContext context,
             ILogger<TurnosController> logger,
             IEmailSender emailSender,
-            IConfiguration config
+            IConfiguration config,
+            ITurnoStateService turnoStateService
         )
         {
             _context = context;
             _logger = logger;
             _emailSender = emailSender;
             _config = config;
+            _turnoStateService = turnoStateService;
         }
 
         // Helper: obtener userId desde claims
@@ -51,9 +54,11 @@ namespace backend.Controllers
         }
 
         // GET: api/turnos (Lista de turnos)
+        // Por defecto devolvemos SÓLO turnos futuros para mantener la vista limpia.
+        // Clientes pueden pasar `?includePast=true` para ver historial de turnos vencidos.
         [HttpGet]
         [Authorize]
-        public async Task<IActionResult> GetAllTurnosAsync()
+        public async Task<IActionResult> GetAllTurnosAsync([FromQuery] bool includePast = false)
         {
             var userId = GetUserIdFromClaims();
             var role = GetRoleFromClaims();
@@ -63,13 +68,21 @@ namespace backend.Controllers
 
             try
             {
-                // Administrador ve todos
+                // Actualizar estados de turnos expirados antes de listar (no bloquear si falla)
+                try
+                {
+                    await _turnoStateService.UpdateExpiredTurnosAsync();
+                }
+                catch { }
+
+                // Administrador ve todos los turnos (sin filtrar por fecha)
                 if (string.Equals(role, "Administrador", StringComparison.OrdinalIgnoreCase))
                 {
                     var turnosAll = await _context
                         .Turno.Include(t => t.Cliente)
                         .Include(t => t.Barbero)
                         .Include(t => t.Estado)
+                        .OrderBy(t => t.FechaHora)
                         .Select(t => new
                         {
                             t.Id,
@@ -97,13 +110,17 @@ namespace backend.Controllers
                     );
                 }
 
-                // Barbero ve solo sus turnos
+                // Barbero ve solo sus turnos vigentes (por defecto). Puede pedir historial con ?includePast=true
                 if (string.Equals(role, "Barbero", StringComparison.OrdinalIgnoreCase))
                 {
-                    var turnosBarbero = await _context
-                        .Turno.Where(t => t.BarberoId == userId.Value)
+                    var queryBarbero = _context.Turno.Where(t => t.BarberoId == userId.Value);
+                    if (!includePast)
+                        queryBarbero = queryBarbero.Where(t => t.FechaHora > DateTime.Now);
+
+                    var turnosBarbero = await queryBarbero
                         .Include(t => t.Cliente)
                         .Include(t => t.Estado)
+                        .OrderBy(t => t.FechaHora)
                         .Select(t => new
                         {
                             t.Id,
@@ -128,13 +145,17 @@ namespace backend.Controllers
                     );
                 }
 
-                // Cliente ve solo sus turnos
+                // Cliente ve SÓLO turnos futuros por defecto (vista limpia). Si pasa `?includePast=true` puede ver historial.
                 if (string.Equals(role, "Cliente", StringComparison.OrdinalIgnoreCase))
                 {
-                    var turnosCliente = await _context
-                        .Turno.Where(t => t.ClienteId == userId.Value)
+                    var queryCliente = _context.Turno.Where(t => t.ClienteId == userId.Value);
+                    if (!includePast)
+                        queryCliente = queryCliente.Where(t => t.FechaHora > DateTime.Now);
+
+                    var turnosCliente = await queryCliente
                         .Include(t => t.Barbero)
                         .Include(t => t.Estado)
+                        .OrderBy(t => t.FechaHora)
                         .Select(t => new
                         {
                             t.Id,
@@ -159,7 +180,6 @@ namespace backend.Controllers
                     );
                 }
 
-                // Reemplazado Forbid(...) por 403 con mensaje
                 return StatusCode(
                     403,
                     new
@@ -173,6 +193,129 @@ namespace backend.Controllers
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error obteniendo turnos para usuario {UserId}", userId);
+                return StatusCode(500, "Error interno del servidor");
+            }
+        }
+
+        // GET: api/turnos/barbero/mis-turnos
+        // Devuelve por defecto los turnos vigentes (desde ahora). Soporta filtros opcionales y paginación.
+        [HttpGet("barbero/mis-turnos")]
+        [Authorize]
+        public async Task<IActionResult> GetMisTurnosBarberoAsync(
+            [FromQuery] DateTime? from = null,
+            [FromQuery] DateTime? to = null,
+            [FromQuery] bool includePast = false,
+            [FromQuery] string? estados = null,
+            [FromQuery] int page = 1,
+            [FromQuery] int pageSize = 50
+        )
+        {
+            var userId = GetUserIdFromClaims();
+            var role = GetRoleFromClaims();
+
+            if (userId == null || string.IsNullOrEmpty(role))
+                return Unauthorized("Token inválido");
+
+            if (!string.Equals(role, "Barbero", StringComparison.OrdinalIgnoreCase))
+                return StatusCode(
+                    403,
+                    new
+                    {
+                        status = 403,
+                        error = "Forbidden",
+                        message = "Solo barberos pueden acceder a este endpoint.",
+                    }
+                );
+
+            // Normalizar paginación
+            if (page <= 0)
+                page = 1;
+            if (pageSize <= 0)
+                pageSize = 25;
+            if (pageSize > 200)
+                pageSize = 200;
+
+            try
+            {
+                // Por defecto, si no se solicita historial y no se pasó 'from', usamos desde ahora
+                if (!includePast && from == null)
+                    from = DateTime.Now;
+
+                var query = _context.Turno.AsQueryable();
+                query = query.Where(t => t.BarberoId == userId.Value);
+
+                if (!includePast && from != null)
+                    query = query.Where(t => t.FechaHora >= from.Value);
+
+                if (from != null && includePast)
+                    query = query.Where(t => t.FechaHora >= from.Value);
+
+                if (to != null)
+                    query = query.Where(t => t.FechaHora <= to.Value);
+
+                // Filtrar por estados (csv) si se pasó
+                if (!string.IsNullOrWhiteSpace(estados))
+                {
+                    var estadosList = estados
+                        .Split(',', StringSplitOptions.RemoveEmptyEntries)
+                        .Select(s => s.Trim())
+                        .Where(s => int.TryParse(s, out _))
+                        .Select(int.Parse)
+                        .ToList();
+
+                    if (estadosList.Count > 0)
+                        query = query.Where(t => estadosList.Contains(t.EstadoId));
+                }
+
+                // Conteo total antes de paginar
+                var total = await query.CountAsync();
+
+                // Orden: si se pidió historial (includePast=true) devolvemos más reciente primero
+                if (includePast)
+                    query = query.OrderByDescending(t => t.FechaHora);
+                else
+                    query = query.OrderBy(t => t.FechaHora);
+
+                var items = await query
+                    .Include(t => t.Cliente)
+                    .Include(t => t.Estado)
+                    .Skip((page - 1) * pageSize)
+                    .Take(pageSize)
+                    .Select(t => new
+                    {
+                        t.Id,
+                        t.FechaHora,
+                        Cliente = t.Cliente != null
+                            ? new { t.ClienteId, Nombre = t.Cliente.Nombre ?? "Desconocido" }
+                            : null,
+                        Estado = t.Estado != null
+                            ? new { t.EstadoId, Nombre = t.Estado.Nombre ?? "Desconocido" }
+                            : null,
+                        CantidadAtenciones = t.Atenciones.Count,
+                    })
+                    .ToListAsync();
+
+                var totalPages = (int)Math.Ceiling(total / (double)pageSize);
+
+                return Ok(
+                    new
+                    {
+                        status = 200,
+                        message = "Turnos obtenidos correctamente.",
+                        data = items,
+                        pagination = new
+                        {
+                            total,
+                            page,
+                            pageSize,
+                            totalPages,
+                        },
+                    }
+                );
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error obteniendo turnos del barbero {UserId}", userId);
                 return StatusCode(500, "Error interno del servidor");
             }
         }
@@ -220,6 +363,19 @@ namespace backend.Controllers
                     }
                 );
 
+            // Si el turno ya fue marcado por el sistema como Caducado(4) o Atendido(5), no permitir cambios manuales
+            if (turno.Estado != null && (turno.Estado.EstadoId == 4 || turno.Estado.EstadoId == 5))
+            {
+                return BadRequest(
+                    new
+                    {
+                        status = 400,
+                        error = "Bad Request",
+                        message = "No se puede modificar el estado de un turno que ya fue marcado como Caducado o Atendido.",
+                    }
+                );
+            }
+
             return Ok(
                 new
                 {
@@ -264,7 +420,7 @@ namespace backend.Controllers
                 }
 
                 // Validación: Días laborales
-                if (!IsValidBusinessDay(turno.FechaHora))
+                if (!IsValidBusinessDay(turno.FechaHora, configuraciones))
                 {
                     return BadRequest(
                         new
@@ -355,23 +511,24 @@ namespace backend.Controllers
                         );
                 }
 
-                // Límite de turnos por cliente por día (aplicable siempre, para evitar eludir la regla)
+                // Límite de turnos por cliente (no por día): contar solo turnos activos
+                // (Pendiente = 1, Confirmado = 2). Los turnos cancelados/completados
+                // no se cuentan, por lo que si el cliente cancela puede sacar otro.
                 {
-                    var fechaTurno = turno.FechaHora.Date;
-                    var turnosDelDia = await _context
+                    var turnosActivos = await _context
                         .Turno.Where(t =>
-                            t.ClienteId == turno.ClienteId && t.FechaHora.Date == fechaTurno
+                            t.ClienteId == turno.ClienteId && (t.EstadoId == 1 || t.EstadoId == 2)
                         )
                         .CountAsync();
 
-                    if (turnosDelDia >= configuraciones.MaxTurnosPorClientePorDia)
+                    if (turnosActivos >= configuraciones.MaxTurnosPorClientePorDia)
                     {
                         return BadRequest(
                             new
                             {
                                 status = 400,
                                 error = "Bad Request",
-                                message = $"No podés tener más de {configuraciones.MaxTurnosPorClientePorDia} turnos por día.",
+                                message = $"No podés tener más de {configuraciones.MaxTurnosPorClientePorDia} turnos activos al mismo tiempo.",
                             }
                         );
                     }
@@ -782,11 +939,13 @@ namespace backend.Controllers
 
             try
             {
-                var hoy = DateTime.Today;
+                // Mostrar solo turnos futuros (después del momento actual)
+                var ahora = DateTime.Now;
                 var turnos = await _context
-                    .Turno.Where(t => t.ClienteId == userId.Value && t.FechaHora >= hoy)
+                    .Turno.Where(t => t.ClienteId == userId.Value && t.FechaHora > ahora)
                     .Include(t => t.Barbero)
                     .Include(t => t.Estado)
+                    .OrderBy(t => t.FechaHora)
                     .Select(t => new
                     {
                         t.Id,
@@ -954,6 +1113,12 @@ namespace backend.Controllers
 
             // Administrador puede cambiar cualquiera
             turno.EstadoId = dto.EstadoId;
+
+            // Guardar observación si se proporciona (especialmente útil para cancelaciones)
+            if (!string.IsNullOrEmpty(dto.Observacion))
+            {
+                turno.Observacion = dto.Observacion;
+            }
 
             // Registrar auditoría de modificación
             turno.ModificadoPor = $"{role}:{userId}";
@@ -1273,8 +1438,10 @@ namespace backend.Controllers
                     );
                 }
 
+                var configuraciones = await ObtenerConfiguracionesSistemaAsync();
+
                 // Validar día laboral
-                if (!IsValidBusinessDay(fecha))
+                if (!IsValidBusinessDay(fecha, configuraciones))
                 {
                     return Ok(
                         new
@@ -1285,8 +1452,6 @@ namespace backend.Controllers
                         }
                     );
                 }
-
-                var configuraciones = await ObtenerConfiguracionesSistemaAsync();
                 var duracion = configuraciones.DuracionTurnoMinutos;
                 var anticipacionHoras = configuraciones.AntipacionMinimaHoras;
 
@@ -1421,6 +1586,10 @@ namespace backend.Controllers
                         Nombre = u.Nombre ?? "Desconocido",
                         u.Avatar,
                         u.Telefono,
+                        // Añadir esta línea para incluir AvatarUrl
+                        AvatarUrl = string.IsNullOrEmpty(u.Avatar)
+                            ? $"{Request.Scheme}://{Request.Host}/avatars/no_avatar.jpg"
+                            : $"{Request.Scheme}://{Request.Host}{u.Avatar}",
                     })
                     .Take(limit)
                     .ToListAsync();
@@ -1450,28 +1619,41 @@ namespace backend.Controllers
             }
         }
 
-        // Helper: Validar horario de atención cortado
-        private bool IsValidBusinessHour(DateTime fechaHora)
+        // Helper: Validar días laborales (usando configuraciones)
+        private bool IsValidBusinessDay(DateTime fechaHora, ConfiguracionesSistema configuraciones)
         {
-            var hora = fechaHora.TimeOfDay;
+            // Si existe flag explicito para domingo cerrado
+            if (configuraciones.DomingoCerrado && fechaHora.DayOfWeek == DayOfWeek.Sunday)
+                return false;
 
-            // Horario matutino: 10:00 - 13:00 (último turno 12:00)
-            var matinoInicio = new TimeSpan(10, 0, 0);
-            var matinoFin = new TimeSpan(12, 0, 0);
+            // Si se definió lista de días laborales cortado (L,M,X,J,V,S), respetarla
+            if (!string.IsNullOrWhiteSpace(configuraciones.DiasLaboralesCortado))
+            {
+                var dias = configuraciones
+                    .DiasLaboralesCortado.Split(
+                        ',',
+                        StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries
+                    )
+                    .Select(d => d.ToUpper())
+                    .ToList();
 
-            // Horario vespertino: 17:00 - 21:00 (último turno 20:00)
-            var vespertinoInicio = new TimeSpan(17, 0, 0);
-            var vespertinoFin = new TimeSpan(20, 0, 0);
+                var map = new Dictionary<string, DayOfWeek>
+                {
+                    { "L", DayOfWeek.Monday },
+                    { "M", DayOfWeek.Tuesday },
+                    { "X", DayOfWeek.Wednesday },
+                    { "J", DayOfWeek.Thursday },
+                    { "V", DayOfWeek.Friday },
+                    { "S", DayOfWeek.Saturday },
+                    { "D", DayOfWeek.Sunday },
+                };
 
-            return (hora >= matinoInicio && hora <= matinoFin)
-                || (hora >= vespertinoInicio && hora <= vespertinoFin);
-        }
+                var valido = dias.Any(s => map.ContainsKey(s) && map[s] == fechaHora.DayOfWeek);
+                return valido;
+            }
 
-        // Helper: Validar días laborales (Lunes a Sábado)
-        private bool IsValidBusinessDay(DateTime fechaHora)
-        {
-            var diaSemana = fechaHora.DayOfWeek;
-            return diaSemana != DayOfWeek.Sunday; // Domingo cerrado
+            // Default: Lunes a Sábado
+            return fechaHora.DayOfWeek != DayOfWeek.Sunday;
         }
 
         // ✅ Helper: Obtener configuraciones desde base de datos con cache en memoria
@@ -1484,14 +1666,19 @@ namespace backend.Controllers
                     new[]
                     {
                         "DURACION_TURNO_MINUTOS",
+                        "MAX_TURNOS_POR_CLIENTE",
                         "MAX_TURNOS_POR_CLIENTE_POR_DIA",
                         "ANTICIPACION_MINIMA_HORAS",
                         "HORARIO_MATUTINO_INICIO",
                         "HORARIO_MATUTINO_FIN",
                         "HORARIO_VESPERTINO_INICIO",
                         "HORARIO_VESPERTINO_FIN",
+                        "ULTIMO_TURNO_MATUTINO",
+                        "ULTIMO_TURNO_VESPERTINO",
+                        "DIAS_LABORALES_CORTADO",
+                        "DOMINGO_CERRADO",
                         "CANCELACION_MINIMA_HORAS",
-                        "OBSERVACION_CANCELACION_HABILITADA", // <-- nueva clave leída
+                        "OBSERVACION_CANCELACION_HABILITADA",
                     }.Contains(c.Clave)
                 )
                 .ToDictionaryAsync(c => c.Clave, c => c.Valor);
@@ -1504,7 +1691,9 @@ namespace backend.Controllers
                 ? duracion
                 : 60;
             configuraciones.MaxTurnosPorClientePorDia = int.TryParse(
-                configs.GetValueOrDefault("MAX_TURNOS_POR_CLIENTE_POR_DIA"),
+                // Preferir la nueva clave; fallback a la antigua por compatibilidad
+                configs.GetValueOrDefault("MAX_TURNOS_POR_CLIENTE")
+                    ?? configs.GetValueOrDefault("MAX_TURNOS_POR_CLIENTE_POR_DIA"),
                 out var maxTurnos
             )
                 ? maxTurnos
@@ -1541,20 +1730,37 @@ namespace backend.Controllers
             configuraciones.HorarioVespertinoFin =
                 configs.GetValueOrDefault("HORARIO_VESPERTINO_FIN") ?? "21:00";
 
+            // Últimos slots permitidos (para que turno + duración quepan)
+            configuraciones.UltimoTurnoMatutino =
+                configs.GetValueOrDefault("ULTIMO_TURNO_MATUTINO") ?? "12:00";
+            configuraciones.UltimoTurnoVespertino =
+                configs.GetValueOrDefault("ULTIMO_TURNO_VESPERTINO") ?? "20:00";
+
+            // Días laborales en formato corto (L,M,X,J,V,S) y flag domingo cerrado
+            configuraciones.DiasLaboralesCortado =
+                configs.GetValueOrDefault("DIAS_LABORALES_CORTADO") ?? "L,M,X,J,V,S";
+            configuraciones.DomingoCerrado = bool.TryParse(
+                configs.GetValueOrDefault("DOMINGO_CERRADO"),
+                out var domingoCerrado
+            )
+                ? domingoCerrado
+                : true;
+
             return configuraciones;
         }
 
         // ✅ Helper: Validar horario de atención cortado (usando configuraciones)
         private bool IsValidBusinessHour(DateTime fechaHora, ConfiguracionesSistema configuraciones)
         {
-            var hora = fechaHora.TimeOfDay;
+            // Validar que el turno (inicio + duración) quede dentro de una franja matutina o vespertina
+            var slotStart = fechaHora.TimeOfDay;
+            var slotEnd = fechaHora.AddMinutes(configuraciones.DuracionTurnoMinutos).TimeOfDay;
 
-            // Parsear horarios desde configuración
-            if (!TimeSpan.TryParse(configuraciones.HorarioMatutinoInicio, out var matinoInicio))
-                matinoInicio = new TimeSpan(10, 0, 0);
-
-            if (!TimeSpan.TryParse(configuraciones.HorarioMatutinoFin, out var matinoFin))
-                matinoFin = new TimeSpan(12, 0, 0);
+            // Parsear horarios desde configuración con defaults
+            if (!TimeSpan.TryParse(configuraciones.HorarioMatutinoInicio, out var matutinoInicio))
+                matutinoInicio = new TimeSpan(10, 0, 0);
+            if (!TimeSpan.TryParse(configuraciones.HorarioMatutinoFin, out var matutinoFin))
+                matutinoFin = new TimeSpan(13, 0, 0);
 
             if (
                 !TimeSpan.TryParse(
@@ -1563,12 +1769,28 @@ namespace backend.Controllers
                 )
             )
                 vespertinoInicio = new TimeSpan(17, 0, 0);
-
             if (!TimeSpan.TryParse(configuraciones.HorarioVespertinoFin, out var vespertinoFin))
-                vespertinoFin = new TimeSpan(20, 0, 0);
+                vespertinoFin = new TimeSpan(21, 0, 0);
 
-            return (hora >= matinoInicio && hora <= matinoFin)
-                || (hora >= vespertinoInicio && hora <= vespertinoFin);
+            // Últimos slots (si están configurados) representan el último horario DE INICIO permitido
+            if (!TimeSpan.TryParse(configuraciones.UltimoTurnoMatutino, out var ultimoMatutino))
+                ultimoMatutino = new TimeSpan(12, 0, 0);
+            if (!TimeSpan.TryParse(configuraciones.UltimoTurnoVespertino, out var ultimoVespertino))
+                ultimoVespertino = new TimeSpan(20, 0, 0);
+
+            // Chequear matutino: inicio dentro de matutino, inicio <= ultimoMatutino y fin <= matutinoFin
+            var enMatutino =
+                slotStart >= matutinoInicio
+                && slotStart <= ultimoMatutino
+                && slotEnd <= matutinoFin;
+
+            // Chequear vespertino: inicio dentro de vespertino, inicio <= ultimoVespertino y fin <= vespertinoFin
+            var enVespertino =
+                slotStart >= vespertinoInicio
+                && slotStart <= ultimoVespertino
+                && slotEnd <= vespertinoFin;
+
+            return enMatutino || enVespertino;
         }
     }
 
@@ -1585,6 +1807,14 @@ namespace backend.Controllers
         public string HorarioMatutinoFin { get; set; } = "13:00";
         public string HorarioVespertinoInicio { get; set; } = "17:00";
         public string HorarioVespertinoFin { get; set; } = "21:00";
+
+        // Último turno que se puede asignar en cada bloque (para que el turno termine antes)
+        public string UltimoTurnoMatutino { get; set; } = "12:00";
+        public string UltimoTurnoVespertino { get; set; } = "20:00";
+
+        // Días laborales configurados (ej: "L,M,X,J,V,S") y flag para domingo cerrado
+        public string DiasLaboralesCortado { get; set; } = "L,M,X,J,V,S";
+        public bool DomingoCerrado { get; set; } = true;
 
         // NUEVA propiedad: habilitar observación en cancelación
         public bool ObservacionCancelacionHabilitada { get; set; } = false;
